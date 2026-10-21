@@ -1,0 +1,19 @@
+[theme]
+base = "dark"
+primaryColor = "#0E9F6E"
+backgroundColor = "#0D100F"
+secondaryBackgroundColor = "#141A17"
+textColor = "#E7EEEA"
+font = "sans serif"
+
+[server]
+# Match the 20 MB limit shown on the page.
+maxUploadSize = 20
+
+[client]
+# Hides the "Deploy" button, which isn't relevant for a local app.
+toolbarMode = "minimal"
+
+[browser]
+# Local-first: do not send usage statistics.
+gatherUsageStats = false

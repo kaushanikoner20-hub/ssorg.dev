@@ -1,0 +1,1 @@
+"""Tests for ssorg.dev. Real tests arrive in a later stage (see TESTING.md)."""

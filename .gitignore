@@ -1,0 +1,32 @@
+# Virtual environments and Python cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Secrets
+.env
+
+# Local screenshot data (keep only the placeholder)
+data/screenshots/*
+!data/screenshots/.gitkeep
+
+# Generated databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Private or test images (docs/screenshots is for README images and is tracked)
+test_images/
+private_screenshots/
+sample_private/
+
+# Temporary and editor files
+*.tmp
+*.temp
+*.log
+.pytest_cache/
+.DS_Store
+Thumbs.db
