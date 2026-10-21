@@ -12,11 +12,14 @@ __pycache__/
 data/screenshots/*
 !data/screenshots/.gitkeep
 
-# Generated databases
+# Generated databases (the library lives in data/ssorg.db)
+data/ssorg.db
 *.db
 *.sqlite
 *.sqlite3
 *.db-journal
+*.db-wal
+*.db-shm
 
 # Private or test images (docs/screenshots is for README images and is tracked)
 test_images/

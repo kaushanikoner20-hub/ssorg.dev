@@ -12,7 +12,7 @@ from pathlib import Path
 APP_NAME = "ssorg.dev"
 TAGLINE = "Your screenshots, finally searchable."
 ASK_FEATURE_NAME = "Ask ssorg"  # reserved for a later stage
-CURRENT_STAGE = "Stage 2: OCR and local Gemma analysis"
+CURRENT_STAGE = "Stage 3: local storage, library and duplicate detection"
 
 # ----- Uploads -----
 # Extensions are lowercase and include the dot, e.g. ".png".
@@ -22,12 +22,9 @@ SUPPORTED_IMAGE_FORMATS = ("PNG", "JPEG", "WEBP")
 MAX_FILE_SIZE_MB = 20
 PREVIEW_MAX_PIXELS = 600  # previews are shrunk to this size before display
 PREVIEW_COLUMNS = 3
+LIBRARY_PAGE_SIZE = 12  # screenshots shown per page in the library
 
-# ----- Paths (planned for later stages; nothing is created in Stage 1) -----
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SCREENSHOT_DIR = PROJECT_ROOT / "data" / "screenshots"
-DATABASE_FILENAME = "ssorg.db"  # planned SQLite file, not created yet
-DATABASE_PATH = PROJECT_ROOT / "data" / DATABASE_FILENAME
 
 # ----- Optional .env file -----
 # The app works without a .env file. If one exists in the project root, its
@@ -65,6 +62,22 @@ def _env_int(name: str, default: int) -> int:
 
 
 _load_env_file(PROJECT_ROOT / ".env")
+
+# ----- Local storage (Stage 3) -----
+# Defaults: everything lives in the "data" folder inside the project.
+# Relative paths in the environment variables are relative to the project root.
+def _env_path(name: str, default: Path) -> Path:
+    value = _env(name, "")
+    if not value:
+        return default
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+DATA_DIR = _env_path("SSORG_DATA_DIR", PROJECT_ROOT / "data")
+SCREENSHOT_DIR = _env_path("SSORG_SCREENSHOT_DIR", DATA_DIR / "screenshots")
+DATABASE_FILENAME = "ssorg.db"
+DATABASE_PATH = _env_path("SSORG_DATABASE_PATH", DATA_DIR / DATABASE_FILENAME)
 
 # ----- OCR (Tesseract) -----
 # Leave TESSERACT_CMD empty to auto-detect (PATH, then the usual Windows install folders).

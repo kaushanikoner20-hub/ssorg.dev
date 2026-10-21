@@ -8,7 +8,7 @@ How ssorg.dev analyzes screenshots in Stage 2. Everything here describes what th
 2. **AI analysis** (`app/gemma.py`): if meaningful text was found, the text is sent to Ollama's local chat API (`/api/chat`, default `http://localhost:11434`) using the model `gemma3:4b`.
 3. **Validation**: the answer is parsed as JSON (never with `eval`) and checked before it is shown.
 
-Each screenshot goes through these steps on its own. A failure in one does not stop the others.
+Each screenshot goes through these steps on its own. A failure in one does not stop the others. Since Stage 3 the results are saved in SQLite, and a screenshot whose AI step failed keeps its OCR text and can be analyzed again with **Re-run analysis**.
 
 ## What the model is asked for
 
