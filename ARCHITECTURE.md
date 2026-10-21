@@ -1,15 +1,22 @@
 # Architecture
 
-> Starter document. It will describe how ssorg.dev is put together as features are added.
+How ssorg.dev is put together today (Stage 2).
 
-## Current (Stage 1)
+## Modules
 
-- `app/main.py`: all Streamlit UI.
-- `app/config.py`: settings and colors.
-- Other files in `app/` are TODO placeholders with no code.
+- `app/main.py`: all Streamlit UI (dashboard, upload, results display).
+- `app/config.py`: settings, with environment variables and an optional `.env` file.
+- `app/ocr.py`: Tesseract OCR, returns an `OcrResult`.
+- `app/gemma.py`: local Ollama client and answer validation, returns a `GemmaResult`.
+- `app/processor.py`: runs OCR then AI analysis for each screenshot. No Streamlit code, so it is easy to test.
+- `app/database.py`, `app/search.py`: placeholders for later stages.
 
-## Planned flow
+## Flow
 
-Import -> Extract (`ocr.py`) -> Organize (`gemma.py`) -> Store (`database.py`) -> Search (`search.py`), connected by `processor.py`.
+Upload -> OCR (`ocr.py`) -> if text was found, analysis (`gemma.py`) -> results kept in Streamlit session state -> shown in the UI.
 
-This document will later include a diagram, module responsibilities and the database schema.
+Imports go one way: `main` -> `processor` -> `ocr` / `gemma` -> `config`. Nothing imports `main`.
+
+## Planned
+
+Stage 3 adds SQLite storage (`ssorg.db`) and saved screenshots. Search and Ask ssorg come after that. This document will then gain a diagram and the database schema.

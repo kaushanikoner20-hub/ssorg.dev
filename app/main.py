@@ -1,13 +1,15 @@
-"""ssorg.dev - Stage 1: project foundation, dashboard UI and upload preview.
+"""ssorg.dev - Stage 2: dashboard UI, upload preview, OCR and local Gemma analysis.
 
 Run from the project root with:
     streamlit run app/main.py
 
-Stage 1 does NOT do OCR, AI, database storage or search.
+OCR (Tesseract) and AI analysis (Gemma through local Ollama) work in Stage 2.
+Database storage, search and Ask ssorg do NOT exist yet.
 Uploaded images are only held in memory for the current session.
 """
 
 import io
+import re
 import sys
 from pathlib import Path
 from string import Template
@@ -21,7 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app import config  # noqa: E402  (must come after the path fix above)
+from app import config, gemma, ocr, processor  # noqa: E402  (must come after the path fix above)
 
 # ----- Navigation -----
 PAGE_DASHBOARD = "Dashboard"
@@ -46,6 +48,7 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 .ss-lead { color: $muted; max-width: 62ch; line-height: 1.65; }
 .ss-section { font-size: 1.25rem; font-weight: 600; margin: 2.4rem 0 0.4rem 0; }
 .ss-hint { color: $muted; font-size: 0.92rem; margin-bottom: 0.8rem; }
+.ss-label { color: $muted; font-size: 0.85rem; margin: 0.9rem 0 0.15rem 0; }
 
 .ss-logo { font-family: "Cascadia Code", Consolas, monospace; font-size: 1.35rem;
            font-weight: 700; margin: 0; }
@@ -117,6 +120,17 @@ def stat_card_html(label, value, note):
     )
 
 
+def escape_markdown(text):
+    """Make text safe to show with st.markdown, so it is displayed literally.
+
+    OCR text and AI answers are untrusted. Without this, text like
+    ![x](http://...) could make the browser load a remote image (a way to leak
+    information), and links or emoji codes would be rendered. A backslash before
+    any punctuation character turns it into plain text.
+    """
+    return re.sub(r"([!-/:-@\[-`{-~])", r"\\\1", text).replace("\n", "  \n")
+
+
 # ----- Upload helpers -----
 def get_file_id(uploaded_file):
     """Give each uploaded file a stable id so we can track removals."""
@@ -162,6 +176,7 @@ def clear_selection():
     """Reset the uploader and forget removals. A new key makes a fresh uploader."""
     st.session_state.uploader_key += 1
     st.session_state.removed_file_ids = set()
+    st.session_state.results = {}
 
 
 # ----- Sidebar -----
@@ -182,7 +197,8 @@ def render_sidebar():
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown(
             '<div class="ss-privacy">Designed for local-first processing. '
-            "In Stage 1, selected images stay in memory for this session only "
+            "OCR runs on your computer. Extracted text is sent to your local Ollama "
+            "service for AI analysis. Images stay in memory for this session only "
             "and are not saved.</div>",
             unsafe_allow_html=True,
         )
@@ -194,10 +210,9 @@ def render_header():
     st.markdown('<h1 class="ss-title">Welcome to ssorg.dev</h1>', unsafe_allow_html=True)
     st.markdown(f'<p class="ss-subtitle">{config.TAGLINE}</p>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="ss-lead">ssorg.dev is being built to read the text in your screenshots, '
-        "sort them into categories, and let you search or ask questions about them, "
-        "all on your own computer. Right now you can add screenshots and preview them. "
-        "Nothing else works yet.</p>",
+        '<p class="ss-lead">ssorg.dev reads the text in your screenshots with Tesseract OCR '
+        "and sorts and summarizes them with a local Gemma model. "
+        "Saving a library, keyword search and Ask ssorg are not available yet.</p>",
         unsafe_allow_html=True,
     )
 
@@ -205,29 +220,30 @@ def render_header():
 def render_stat_cards():
     st.markdown('<p class="ss-section">Your library</p>', unsafe_allow_html=True)
     st.markdown(
-        '<p class="ss-hint">No database exists yet, so these are empty on purpose.</p>',
+        '<p class="ss-hint">No database exists yet, so these are empty on purpose. Results below are kept for this session only.</p>',
         unsafe_allow_html=True,
     )
     col_total, col_categories, col_recent = st.columns(3)
     with col_total:
-        st.markdown(stat_card_html("Total screenshots", "0", "Nothing stored yet. Saving arrives in a later stage."), unsafe_allow_html=True)
+        st.markdown(stat_card_html("Total screenshots", "0", "Nothing is stored yet. Saving arrives in Stage 3."), unsafe_allow_html=True)
     with col_categories:
-        st.markdown(stat_card_html("Categories", "0", "Categories appear after AI categorization is built."), unsafe_allow_html=True)
+        st.markdown(stat_card_html("Categories", "0", "A saved library, with categories, arrives in Stage 3."), unsafe_allow_html=True)
     with col_recent:
-        st.markdown(stat_card_html("Recently added", "None", "Your recent imports will be listed here."), unsafe_allow_html=True)
+        st.markdown(stat_card_html("Recently added", "None", "Saved screenshots will be listed here in Stage 3."), unsafe_allow_html=True)
 
 
 def render_upload_section():
     st.markdown('<p class="ss-section">Add screenshots</p>', unsafe_allow_html=True)
     st.markdown(
         '<p class="ss-hint">PNG, JPG, JPEG or WEBP, up to '
-        f"{config.MAX_FILE_SIZE_MB} MB each. Files are previewed here and are not saved.</p>",
+        f"{config.MAX_FILE_SIZE_MB} MB each. Files stay in memory for this session and are not saved.</p>",
         unsafe_allow_html=True,
     )
 
     # Session state survives Streamlit reruns (every click reruns this script).
     st.session_state.setdefault("removed_file_ids", set())
     st.session_state.setdefault("uploader_key", 0)
+    st.session_state.setdefault("results", {})  # file id -> ScreenshotResult, kept across reruns
 
     uploaded_files = st.file_uploader(
         "Drop screenshots here or browse",
@@ -249,7 +265,7 @@ def render_upload_section():
             st.warning(f"**{uploaded_file.name}** was skipped. {message}")
 
     if valid_files:
-        st.markdown(f"**{len(valid_files)} selected** (preview only, not saved)")
+        st.markdown(f"**{len(valid_files)} selected** (kept in memory, not saved)")
         for row_start in range(0, len(valid_files), config.PREVIEW_COLUMNS):
             columns = st.columns(config.PREVIEW_COLUMNS)
             row_files = valid_files[row_start:row_start + config.PREVIEW_COLUMNS]
@@ -261,21 +277,146 @@ def render_upload_section():
 
     process_col, clear_col = st.columns([2, 1])
     with process_col:
-        st.button("Process screenshots", type="primary", disabled=True, key="process_button")
+        process_clicked = st.button(
+            "Process screenshots", type="primary", disabled=not valid_files, key="process_button"
+        )
     with clear_col:
         st.button("Clear selection", on_click=clear_selection, disabled=not uploaded_files, key="clear_button")
-    st.info(
-        "Processing is not available in Stage 1. It will be added in a later stage. "
-        "Your selected images are not saved anywhere."
+    st.markdown(
+        '<div class="ss-privacy">Text is read on your computer with Tesseract. The extracted text '
+        f"(not the image) is then sent to your local Ollama service, model {config.OLLAMA_MODEL}, "
+        "for analysis. Nothing is saved to disk.</div>",
+        unsafe_allow_html=True,
     )
+
+    if process_clicked:
+        run_processing(valid_files)
+    render_results(valid_files)
+    render_setup_check()
+
+
+def run_processing(valid_files):
+    """Process the selected screenshots that do not have a good result yet."""
+    items = [
+        (file_id, uploaded_file.name, uploaded_file.getvalue())
+        for file_id, uploaded_file in valid_files
+        if processor.needs_processing(st.session_state.results.get(file_id))
+    ]
+    if not items:
+        st.info("All selected screenshots have already been processed.")
+        return
+
+    progress_bar = st.progress(0.0, text="Starting...")
+
+    def show_progress(index, total, filename):
+        progress_bar.progress(index / total, text=f"Processing {filename} ({index + 1} of {total})")
+
+    st.session_state.results.update(processor.process_images(items, on_progress=show_progress))
+    progress_bar.empty()
+
+
+def describe_status(result):
+    """A short status label for a result, used in the expander title."""
+    if result.ocr.status == ocr.STATUS_ERROR:
+        return "OCR error"
+    if result.ocr.status == ocr.STATUS_NO_TEXT:
+        return "No readable text"
+    if result.ai is not None and result.ai.status == gemma.STATUS_SUCCESS:
+        return f"Analyzed, {result.ai.metadata.category}"
+    return "Text extracted, AI analysis not available"
+
+
+def show_labeled_value(label, value):
+    """Show a small label and a literal (escaped) text value."""
+    st.markdown(f'<p class="ss-label">{label}</p>', unsafe_allow_html=True)
+    st.markdown(escape_markdown(value))
+
+
+def render_ai_result(ai_result):
+    """Show the Gemma analysis, or explain why there is none."""
+    if ai_result is None:
+        return
+    if ai_result.status != gemma.STATUS_SUCCESS:
+        st.warning(f"AI analysis is not available: {ai_result.message} The extracted text is still shown above.")
+        return
+
+    metadata = ai_result.metadata
+    st.success(f"Analyzed locally with {config.OLLAMA_MODEL} through Ollama.")
+    if ai_result.message:
+        st.caption(ai_result.message)
+    # The category and confidence come from fixed allowed lists, so this HTML is safe.
+    st.markdown(
+        f'<span class="ss-badge ss-badge-now">{metadata.category}</span> '
+        f'<span class="ss-badge ss-badge-soon">Confidence: {metadata.confidence}</span>',
+        unsafe_allow_html=True,
+    )
+    show_labeled_value("Summary", metadata.short_summary)
+    show_labeled_value("Important dates", ", ".join(metadata.important_dates) or "None found in the text")
+    show_labeled_value("Named entities", ", ".join(metadata.named_entities) or "None found in the text")
+    show_labeled_value("Useful search terms", ", ".join(metadata.useful_search_terms) or "None")
+
+
+def render_one_result(file_id, result):
+    """Show the OCR text and AI metadata for one screenshot."""
+    if result.ocr.status == ocr.STATUS_ERROR:
+        st.error(result.ocr.message)
+        return
+    if result.ocr.status == ocr.STATUS_NO_TEXT:
+        st.warning(result.ocr.message)
+        return
+
+    st.success(f"Text extracted ({len(result.ocr.text)} characters).")
+    st.markdown('<p class="ss-label">Extracted text</p>', unsafe_allow_html=True)
+    st.text_area(
+        "Extracted text",
+        value=result.ocr.text,
+        height=180,
+        disabled=True,
+        label_visibility="collapsed",
+        key=f"ocr_text_{file_id}",
+    )
+    render_ai_result(result.ai)
+
+
+def render_results(valid_files):
+    """Show one expandable section per processed screenshot in the current selection."""
+    shown = [(file_id, f) for file_id, f in valid_files if file_id in st.session_state.results]
+    if not shown:
+        return
+    st.markdown('<p class="ss-section">Results</p>', unsafe_allow_html=True)
+    for file_id, uploaded_file in shown:
+        result = st.session_state.results[file_id]
+        title = f"{escape_markdown(uploaded_file.name)} - {describe_status(result)}"
+        with st.expander(title, expanded=len(shown) == 1):
+            image_column, detail_column = st.columns([1, 2])
+            with image_column:
+                st.image(make_preview(uploaded_file))
+                st.caption(uploaded_file.name)
+            with detail_column:
+                render_one_result(file_id, result)
+
+
+def render_setup_check():
+    """A button that checks Tesseract and Ollama without processing anything."""
+    with st.expander("Check OCR and AI setup"):
+        st.caption(
+            "Checks that Tesseract and your local Ollama model can be reached. "
+            "No screenshot is processed."
+        )
+        if st.button("Run check", key="setup_check_button"):
+            for is_ready, message in (ocr.check_tesseract(), gemma.check_ollama()):
+                if is_ready:
+                    st.success(message)
+                else:
+                    st.error(message)
 
 
 def render_how_it_works():
     st.markdown('<p class="ss-section">How it works</p>', unsafe_allow_html=True)
     steps = [
-        ("1. Import", "Add screenshots from your computer.", "Preview works now", "now"),
-        ("2. Extract", "Read the text inside each image.", "Coming soon", "soon"),
-        ("3. Organize", "Categorize and summarize with a local AI model.", "Coming soon", "soon"),
+        ("1. Import", "Add screenshots from your computer.", "Works now", "now"),
+        ("2. Extract", "Read the text inside each image with Tesseract.", "Works now", "now"),
+        ("3. Organize", "Categorize and summarize with Gemma through local Ollama.", "Works now", "now"),
         ("4. Search", "Find screenshots by keyword or ask questions.", "Coming soon", "soon"),
     ]
     columns = st.columns(4)
@@ -291,17 +432,13 @@ def render_coming_soon_cards():
         unsafe_allow_html=True,
     )
     features = [
-        ("OCR text extraction", "Pull readable text out of every screenshot using Tesseract on your machine."),
-        ("Gemma AI categorization", "Sort and summarize screenshots with Gemma running locally through Ollama."),
         ("Keyword search", "Type a word and see the screenshots that contain it."),
         (config.ASK_FEATURE_NAME, "Ask questions about your whole screenshot collection in plain language."),
     ]
-    for row_start in (0, 2):
-        columns = st.columns(2)
-        for column, (title, text) in zip(columns, features[row_start:row_start + 2]):
-            with column:
-                st.markdown(card_html(title, text, "Not implemented yet"), unsafe_allow_html=True)
-        st.markdown("<div style='height: 0.8rem'></div>", unsafe_allow_html=True)
+    columns = st.columns(2)
+    for column, (title, text) in zip(columns, features):
+        with column:
+            st.markdown(card_html(title, text, "Not implemented yet"), unsafe_allow_html=True)
 
 
 # ----- Pages -----

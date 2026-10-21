@@ -5,13 +5,14 @@ This file must not import anything from the rest of the app, which
 avoids circular imports.
 """
 
+import os
 from pathlib import Path
 
 # ----- Brand -----
 APP_NAME = "ssorg.dev"
 TAGLINE = "Your screenshots, finally searchable."
 ASK_FEATURE_NAME = "Ask ssorg"  # reserved for a later stage
-CURRENT_STAGE = "Stage 1: UI and upload preview"
+CURRENT_STAGE = "Stage 2: OCR and local Gemma analysis"
 
 # ----- Uploads -----
 # Extensions are lowercase and include the dot, e.g. ".png".
@@ -27,6 +28,75 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SCREENSHOT_DIR = PROJECT_ROOT / "data" / "screenshots"
 DATABASE_FILENAME = "ssorg.db"  # planned SQLite file, not created yet
 DATABASE_PATH = PROJECT_ROOT / "data" / DATABASE_FILENAME
+
+# ----- Optional .env file -----
+# The app works without a .env file. If one exists in the project root, its
+# KEY=VALUE lines are read here (no extra package needed). Real environment
+# variables always win over the file.
+def _load_env_file(path: Path) -> None:
+    if not path.is_file():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]  # remove surrounding quotes
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def _env(name: str, default: str) -> str:
+    """Read a setting from the environment. An empty value counts as 'not set'."""
+    return (os.environ.get(name) or "").strip() or default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(_env(name, str(default)))
+    except ValueError:
+        return default
+
+
+_load_env_file(PROJECT_ROOT / ".env")
+
+# ----- OCR (Tesseract) -----
+# Leave TESSERACT_CMD empty to auto-detect (PATH, then the usual Windows install folders).
+TESSERACT_CMD = _env("TESSERACT_CMD", "")
+TESSERACT_LANG = _env("TESSERACT_LANG", "eng")
+OCR_TIMEOUT_SECONDS = _env_int("OCR_TIMEOUT_SECONDS", 60)
+# Fewer letters/digits than this is treated as "no readable text" (OCR noise).
+MIN_MEANINGFUL_CHARACTERS = 3
+
+# ----- Local AI (Ollama + Gemma) -----
+DEFAULT_OLLAMA_MODEL = "gemma3:4b"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+OLLAMA_MODEL = _env("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+
+
+def _normalize_url(value: str) -> str:
+    value = value.strip().rstrip("/")
+    return value if "://" in value else "http://" + value
+
+
+OLLAMA_BASE_URL = _normalize_url(_env("OLLAMA_HOST", DEFAULT_OLLAMA_URL))
+OLLAMA_CONNECT_TIMEOUT_SECONDS = 5
+# The first request after Ollama starts can be slow while the model loads.
+OLLAMA_TIMEOUT_SECONDS = _env_int("OLLAMA_TIMEOUT", 120)
+OLLAMA_NUM_CONTEXT = 4096  # model context window requested from Ollama
+MAX_AI_TEXT_CHARACTERS = 6000  # longer OCR text is shortened before analysis
+
+AI_CATEGORIES = (
+    "Receipt", "Invoice", "Shopping", "Food", "Travel",
+    "Education", "Work", "Social Media", "Notes", "Other",
+)
+AI_CONFIDENCE_LEVELS = ("low", "medium", "high")
 
 # ----- Colors (also mirrored in .streamlit/config.toml) -----
 COLOR_BACKGROUND = "#0D100F"

@@ -1,2 +1,5 @@
 streamlit>=1.40
 Pillow>=10.0
+pytesseract>=0.3.10
+requests>=2.31
+pytest>=8.0
