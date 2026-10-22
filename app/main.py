@@ -1,18 +1,18 @@
-"""ssorg.dev - Stage 3: dashboard UI, OCR, local Gemma analysis and a saved screenshot library.
+"""ssorg.dev - Stage 4: dashboard, OCR, local Gemma analysis, a saved library, keyword search and Ask ssorg.
 
 Run from the project root with:
     streamlit run app/main.py
 
 OCR (Tesseract) and AI analysis (Gemma through local Ollama) work.
 Screenshots are saved in data/screenshots and described in data/ssorg.db (SQLite).
-Keyword search and Ask ssorg do NOT exist yet.
+Search reads only the saved text. Ask ssorg sends a few relevant excerpts to local Ollama.
 """
 
 import html
 import io
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from string import Template
 
@@ -25,7 +25,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app import config, database, gemma, ocr, processor, storage  # noqa: E402  (must come after the path fix above)
+from app import ask, config, database, gemma, ocr, processor, search, storage  # noqa: E402  (must come after the path fix above)
 
 # ----- Navigation -----
 PAGE_DASHBOARD = "Dashboard"
@@ -34,7 +34,7 @@ PAGE_SEARCH = "Search"
 PAGE_ASK = "Ask ssorg"
 PAGE_SETTINGS = "Settings"
 PAGES = [PAGE_DASHBOARD, PAGE_ALL, PAGE_SEARCH, PAGE_ASK, PAGE_SETTINGS]
-UNFINISHED_PAGES = [PAGE_SEARCH, PAGE_ASK, PAGE_SETTINGS]
+UNFINISHED_PAGES = [PAGE_SETTINGS]
 
 # ----- Styling -----
 # $name placeholders are filled from config.py by string.Template.
@@ -50,6 +50,7 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 .ss-lead { color: $muted; max-width: 62ch; line-height: 1.65; }
 .ss-section { font-size: 1.25rem; font-weight: 600; margin: 2.4rem 0 0.4rem 0; }
 .ss-hint { color: $muted; font-size: 0.92rem; margin-bottom: 0.8rem; }
+mark { background: rgba(14, 159, 110, 0.28); color: inherit; border-radius: 4px; padding: 0 0.15rem; }
 .ss-label { color: $muted; font-size: 0.85rem; margin: 0.9rem 0 0.15rem 0; }
 
 .ss-logo { font-family: "Cascadia Code", Consolas, monospace; font-size: 1.35rem;
@@ -276,8 +277,8 @@ def render_sidebar():
         st.markdown(
             '<div class="ss-privacy">Designed for local-first processing. '
             "Your screenshots and the library database are stored on this computer. "
-            "OCR runs locally, and the extracted text goes only to your local Ollama "
-            "service. No cloud AI is used.</div>",
+            "OCR runs locally. Extracted text and your questions go only to your local "
+            "Ollama service. No cloud AI is used.</div>",
             unsafe_allow_html=True,
         )
     return selected_page
@@ -290,8 +291,8 @@ def render_header():
     st.markdown(
         '<p class="ss-lead">ssorg.dev reads the text in your screenshots with Tesseract OCR, '
         "sorts and summarizes them with a local Gemma model, and keeps them in a library "
-        "on your own computer. Exact duplicates are skipped. "
-        "Keyword search and Ask ssorg are not available yet.</p>",
+        "on your own computer. Exact duplicates are skipped. You can search the library "
+        "by keyword or ask questions about your screenshots.</p>",
         unsafe_allow_html=True,
     )
 
@@ -513,28 +514,12 @@ def render_how_it_works():
         ("1. Import", "Add screenshots. They are saved locally and exact duplicates are skipped.", "Works now", "now"),
         ("2. Extract", "Read the text inside each image with Tesseract.", "Works now", "now"),
         ("3. Organize", "Categorize and summarize with Gemma through local Ollama.", "Works now", "now"),
-        ("4. Search", "Find screenshots by keyword or ask questions.", "Coming soon", "soon"),
+        ("4. Search", "Find screenshots by keyword, or ask a question in plain language.", "Works now", "now"),
     ]
     columns = st.columns(4)
     for column, (title, text, badge, style) in zip(columns, steps):
         with column:
             st.markdown(card_html(title, text, badge, style), unsafe_allow_html=True)
-
-
-def render_coming_soon_cards():
-    st.markdown('<p class="ss-section">Coming soon</p>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="ss-hint">These features are not implemented yet. The cards below are previews of the plan.</p>',
-        unsafe_allow_html=True,
-    )
-    features = [
-        ("Keyword search", "Type a word and see the screenshots that contain it."),
-        (config.ASK_FEATURE_NAME, "Ask questions about your whole screenshot collection in plain language."),
-    ]
-    columns = st.columns(2)
-    for column, (title, text) in zip(columns, features):
-        with column:
-            st.markdown(card_html(title, text, "Not implemented yet"), unsafe_allow_html=True)
 
 
 # ----- Library -----
@@ -653,13 +638,350 @@ def show_library():
         st.button("Show more", key="show_more", on_click=show_more_screenshots)
 
 
+# ----- Search -----
+ALL_CATEGORIES = "All categories"
+SORT_LABELS = {
+    "Best match": "relevance",
+    "Newest first": "newest",
+    "Oldest first": "oldest",
+    "Category (A-Z)": "category",
+}
+
+
+def highlight_html(text, terms):
+    """Show matches with a highlight. Every piece of text is escaped first, so it is shown literally."""
+    parts = []
+    for piece, is_match in search.highlight_segments(text, terms):
+        safe = escape_markdown(piece)
+        parts.append(f"<mark>{safe}</mark>" if is_match and piece.strip() else safe)
+    return "".join(parts)
+
+
+def reset_search():
+    st.session_state.search_query = ""
+    st.session_state.search_category = ALL_CATEGORIES
+    st.session_state.search_sort = "Best match"
+    st.session_state.search_use_dates = False
+    st.session_state.search_page = 1
+    st.session_state.saved_search = {}
+
+
+def go_to_search_page(page_number):
+    st.session_state.search_page = page_number
+
+
+def restore_widget_value(key, saved, default):
+    """Streamlit forgets a widget's value when you leave its page. Bring it back from our own copy."""
+    if key not in st.session_state:
+        st.session_state[key] = saved.get(key, default)
+
+
+def render_search_hit(hit, terms):
+    record = hit.record
+    with st.container(border=True):
+        image_column, text_column = st.columns([1, 3])
+        with image_column:
+            image = load_record_image(record)
+            if image is not None:
+                st.image(image)
+            else:
+                st.caption("Image file missing")
+        with text_column:
+            st.markdown(f"**{escape_markdown(record['original_filename'])}**")
+            badges = f'<span class="ss-badge ss-badge-soon">{html.escape(status_label(record["processing_status"]))}</span>'
+            if record["category"]:
+                badges = f'<span class="ss-badge ss-badge-now">{html.escape(record["category"])}</span> ' + badges
+            st.markdown(badges, unsafe_allow_html=True)
+            if record["short_summary"]:
+                st.markdown(escape_markdown(shorten(record["short_summary"], 200)))
+            if hit.snippet:
+                st.markdown(
+                    f"Match in {hit.snippet_field}: " + highlight_html(hit.snippet, terms),
+                    unsafe_allow_html=True,
+                )
+            note = f"Imported {format_import_date(record['created_at'])}"
+            if hit.matched_fields:
+                note += " | Found in: " + ", ".join(hit.matched_fields)
+            st.caption(note)
+            st.button("View details", key=f"search_view_{record['id']}", on_click=open_screenshot, args=(record["id"],))
+
+
+def show_search():
+    st.markdown('<h1 class="ss-title">Search</h1>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="ss-subtitle">Find screenshots by the words inside them.</p>', unsafe_allow_html=True
+    )
+    try:
+        total = database.get_screenshot_count()
+        category_names = list(database.get_category_counts())
+    except database.DatabaseError:
+        st.error("The screenshot library could not be read. Check that the data folder is available.")
+        return
+    if total == 0:
+        st.markdown(
+            card_html("Nothing to search yet",
+                      "Your library is empty. Go to the Dashboard and import some screenshots first."),
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown(
+        '<p class="ss-hint">Search looks at the text already saved in your library: filenames, extracted text, '
+        "summaries, categories, names, search terms and dates found in the text. It does not process "
+        "any image again, and nothing leaves your computer.</p>",
+        unsafe_allow_html=True,
+    )
+
+    saved = st.session_state.get("saved_search") or {}
+    restore_widget_value("search_query", saved, "")
+    restore_widget_value("search_category", saved, ALL_CATEGORIES)
+    restore_widget_value("search_sort", saved, "Best match")
+    restore_widget_value("search_use_dates", saved, False)
+    restore_widget_value("search_from", saved, date.today() - timedelta(days=30))
+    restore_widget_value("search_to", saved, date.today())
+    category_options = [ALL_CATEGORIES] + category_names
+    if st.session_state.search_category not in category_options:
+        st.session_state.search_category = ALL_CATEGORIES
+
+    query_column, clear_column = st.columns([5, 1])
+    with query_column:
+        query = st.text_input(
+            "Search your screenshots", key="search_query",
+            placeholder="For example: receipt, boarding pass, \"order number\"",
+        )
+    with clear_column:
+        st.markdown("<div style='height: 1.75rem'></div>", unsafe_allow_html=True)
+        st.button("Clear", key="search_clear", on_click=reset_search)
+    category_column, sort_column, date_column = st.columns(3)
+    with category_column:
+        category = st.selectbox("Category", category_options, key="search_category")
+    with sort_column:
+        sort_label = st.selectbox("Sort by", list(SORT_LABELS), key="search_sort")
+    with date_column:
+        st.markdown("<div style='height: 1.75rem'></div>", unsafe_allow_html=True)
+        use_dates = st.checkbox("Filter by import date", key="search_use_dates")
+    from_date = to_date = None
+    if use_dates:
+        from_column, to_column = st.columns(2)
+        with from_column:
+            from_date = st.date_input("From", key="search_from")
+        with to_column:
+            to_date = st.date_input("To", key="search_to")
+        if from_date > to_date:
+            st.warning("The start date is after the end date, so nothing can match. Change one of them.")
+            return
+
+    # Our own copy of the settings, so they survive a visit to another page.
+    st.session_state.saved_search = {
+        "search_query": query, "search_category": category, "search_sort": sort_label,
+        "search_use_dates": use_dates, "search_from": st.session_state.get("search_from"),
+        "search_to": st.session_state.get("search_to"),
+    }
+    # A new search or filter starts again at page 1.
+    signature = (query.strip(), category, sort_label, use_dates, from_date, to_date)
+    if st.session_state.get("search_signature") != signature:
+        st.session_state.search_signature = signature
+        st.session_state.search_page = 1
+
+    page_size = config.SEARCH_PAGE_SIZE
+    page_number = max(1, st.session_state.get("search_page", 1))
+    try:
+        def run_search(page):
+            return search.search_screenshots(
+                query,
+                category=None if category == ALL_CATEGORIES else category,
+                date_range=(from_date, to_date) if use_dates else None,
+                sort=SORT_LABELS[sort_label],
+                limit=page_size,
+                offset=(page - 1) * page_size,
+            )
+
+        response = run_search(page_number)
+        if not response.hits and response.total > 0:  # the page is past the end, for example after deleting
+            page_number = (response.total - 1) // page_size + 1
+            st.session_state.search_page = page_number
+            response = run_search(page_number)
+    except database.DatabaseError:
+        st.error("The search could not read your library. Check that the data folder is available.")
+        return
+
+    noun = "screenshot" if response.total == 1 else "screenshots"
+    if response.terms:
+        st.markdown(f"**{response.total}** {noun} match")
+    else:
+        st.markdown(f"**{response.total}** {noun}" + (" (filtered)" if category != ALL_CATEGORIES or use_dates else ""))
+    if response.terms_were_cut:
+        st.caption(f"Only the first {config.SEARCH_MAX_TERMS} words of your search were used.")
+
+    if response.total == 0:
+        st.markdown(
+            card_html("No screenshots match",
+                      "Try fewer or different words, check the spelling, or remove a filter. Remember that "
+                      "text read by OCR can contain mistakes, and that only saved screenshots can be found."),
+            unsafe_allow_html=True,
+        )
+        return
+
+    for hit in response.hits:
+        render_search_hit(hit, response.terms)
+
+    last_page = (response.total - 1) // page_size + 1
+    if last_page > 1:
+        previous_column, label_column, next_column = st.columns([1, 2, 1])
+        with previous_column:
+            st.button("Previous", key="search_prev", disabled=page_number <= 1,
+                      on_click=go_to_search_page, args=(page_number - 1,))
+        with label_column:
+            st.markdown(f"<p style='text-align:center'>Page {page_number} of {last_page}</p>", unsafe_allow_html=True)
+        with next_column:
+            st.button("Next", key="search_next", disabled=page_number >= last_page,
+                      on_click=go_to_search_page, args=(page_number + 1,))
+
+
+# ----- Ask ssorg -----
+def clear_ask_answer():
+    st.session_state.ask_result = None
+
+
+def render_evidence_item(item, key_prefix):
+    """One source screenshot: thumbnail, details, the extracted text it is based on, and a button."""
+    try:
+        record = database.get_screenshot_by_id(item.id)
+    except database.DatabaseError:
+        record = None
+    terms = [variant for word in item.matched_terms for variant in search.expand_variants(word)]
+    with st.container(border=True):
+        image_column, text_column = st.columns([1, 3])
+        with image_column:
+            image = load_record_image(record) if record else None
+            if image is not None:
+                st.image(image)
+            else:
+                st.caption("Image not available")
+        with text_column:
+            st.markdown(f"**{escape_markdown(item.original_filename)}**")
+            details = f"Imported {item.imported}"
+            if item.category:
+                details = f"{item.category} | " + details
+            st.caption(details)
+            if item.excerpt:
+                st.markdown(
+                    "Extracted text (may contain OCR mistakes): " + highlight_html(item.excerpt, terms),
+                    unsafe_allow_html=True,
+                )
+            if record is None:
+                st.caption("This screenshot is no longer in the library.")
+            else:
+                st.button("View details", key=f"{key_prefix}_view_{item.id}", on_click=open_screenshot, args=(item.id,))
+
+
+def render_ask_result(result):
+    if result is None:
+        return
+    st.markdown('<p class="ss-section">Answer</p>', unsafe_allow_html=True)
+    if result.keywords:
+        st.caption("Searched your screenshots for: " + escape_markdown(", ".join(result.keywords)))
+
+    if result.status == ask.STATUS_ANSWERED:
+        with st.container(border=True):
+            st.markdown(escape_markdown(result.answer))
+            if result.support == "partial":
+                st.caption("The evidence only partly answers this, or it is uncertain. Check the sources below.")
+            else:
+                st.caption("This is stated in the extracted text of the sources below.")
+        for warning in result.warnings:
+            st.warning(warning)
+        st.caption(
+            "The answer is written by a small local AI model from OCR text, which can contain mistakes. "
+            "Compare it with the sources below and open the screenshots to check the originals."
+        )
+        st.markdown('<p class="ss-section">Sources</p>', unsafe_allow_html=True)
+        for item in result.cited:
+            render_evidence_item(item, "ask_src")
+        if result.others:
+            with st.expander(f"Other screenshots that matched ({len(result.others)})"):
+                for item in result.others:
+                    render_evidence_item(item, "ask_other")
+        return
+
+    # Everything below is a case where there is no answer to show.
+    if result.status == ask.STATUS_NO_EVIDENCE:
+        st.info(result.message)
+    elif result.status == ask.STATUS_NO_ANSWER:
+        st.info("The matching screenshots do not seem to answer your question.")
+    elif result.status == ask.STATUS_AI_UNAVAILABLE:
+        st.warning(f"The local AI could not answer. {result.message} The screenshots below matched your question's words.")
+    elif result.status in (ask.STATUS_UNGROUNDED, ask.STATUS_BAD_ANSWER):
+        st.warning(f"{result.message} The screenshots below matched your question's words.")
+    elif result.status == ask.STATUS_ERROR:
+        st.error(result.message)
+    else:
+        st.warning(result.message)
+
+    if result.evidence:
+        title = "Possibly related screenshots" if result.status == ask.STATUS_NO_ANSWER else "Matching screenshots"
+        st.markdown(f'<p class="ss-section">{title}</p>', unsafe_allow_html=True)
+        for item in result.evidence:
+            render_evidence_item(item, "ask_match")
+
+
+def show_ask():
+    st.markdown(f'<h1 class="ss-title">{config.ASK_FEATURE_NAME}</h1>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="ss-subtitle">Ask a question about your saved screenshots.</p>', unsafe_allow_html=True
+    )
+    st.markdown(
+        '<p class="ss-lead">Answers come only from your saved screenshots. ssorg first finds the most '
+        "relevant ones by keyword, then asks the local AI to answer from their extracted text. "
+        "The sources it used are shown with every answer.</p>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="ss-privacy">Your question and a few short excerpts of text from the best-matching '
+        f"screenshots (at most {config.ASK_MAX_EVIDENCE}) are sent to your local Ollama service, model "
+        f"{config.OLLAMA_MODEL}. Nothing is sent to a cloud service. Images are never sent.</div>",
+        unsafe_allow_html=True,
+    )
+    try:
+        total = database.get_screenshot_count()
+    except database.DatabaseError:
+        st.error("The screenshot library could not be read. Check that the data folder is available.")
+        return
+    if total == 0:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown(
+            card_html("Nothing to ask about yet",
+                      "Your library is empty. Go to the Dashboard and import some screenshots first."),
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    restore_widget_value("ask_question", {"ask_question": st.session_state.get("saved_ask_question", "")}, "")
+    question = st.text_area(
+        "Your question", key="ask_question", height=100, max_chars=config.ASK_MAX_QUESTION_CHARS,
+        placeholder="For example: Which screenshot mentions my assignment deadline?",
+    )
+    st.session_state.saved_ask_question = question  # survives a visit to another page
+
+    if st.button("Ask", type="primary", key="ask_button"):
+        if not question.strip():
+            st.warning("Please type a question first.")
+        else:
+            with st.spinner("Searching your screenshots and asking the local AI..."):
+                st.session_state.ask_result = ask.ask_question(question)
+    result = st.session_state.get("ask_result")
+    render_ask_result(result)
+    if result is not None:
+        st.button("Clear answer", key="ask_clear", on_click=clear_ask_answer)
+
+
 # ----- Pages -----
 def show_dashboard():
     render_header()
     render_upload_section()
     render_stat_cards()
     render_how_it_works()
-    render_coming_soon_cards()
 
 
 def show_coming_soon_page(title, description, preview_function=None):
@@ -669,19 +991,6 @@ def show_coming_soon_page(title, description, preview_function=None):
     st.info(f"{title} is not implemented yet. This page is a non-functional preview.")
     if preview_function:
         preview_function()
-
-
-def preview_search():
-    st.text_input("Search your screenshots", placeholder="Search will be available in a later stage", disabled=True)
-
-
-def preview_ask():
-    st.text_input(
-        f"{config.ASK_FEATURE_NAME}",
-        placeholder="For example: which screenshot has my flight confirmation?",
-        disabled=True,
-    )
-    st.caption("Example only. Asking questions is not implemented yet.")
 
 
 def preview_settings():
@@ -712,9 +1021,9 @@ def main():
     elif page == PAGE_ALL:
         show_library()
     elif page == PAGE_SEARCH:
-        show_coming_soon_page("Search", "Find a screenshot by the words inside it.", preview_search)
+        show_search()
     elif page == PAGE_ASK:
-        show_coming_soon_page(config.ASK_FEATURE_NAME, "Ask questions about your screenshots.", preview_ask)
+        show_ask()
     else:
         show_coming_soon_page("Settings", "Tune how ssorg.dev works on your computer.", preview_settings)
 

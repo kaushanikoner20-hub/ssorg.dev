@@ -2,13 +2,13 @@
 
 **Your screenshots, finally searchable.**
 
-ssorg.dev is a local-first AI screenshot organizer. It reads the text in your screenshots with Tesseract OCR and categorizes and summarizes them with a Gemma model running on your own computer through Ollama.
+ssorg.dev is a local-first AI screenshot organizer. It reads the text in your screenshots with Tesseract OCR, categorizes and summarizes them with a Gemma model running on your own computer through Ollama, and lets you search them or ask questions about them.
 
 ## The problem
 
 Screenshots pile up: receipts, error messages, chats, tickets, recipes. They all have filenames like `Screenshot 2026-10-20 143012.png`, so finding one later means scrolling through hundreds of thumbnails.
 
-## Current status: Stage 3 (local library and duplicate detection)
+## Current status: Stage 4 (search and Ask ssorg)
 
 **Works now:**
 - Upload multiple PNG, JPG, JPEG and WEBP screenshots, with previews, validation and removal from the selection.
@@ -19,8 +19,37 @@ Screenshots pile up: receipts, error messages, chats, tickets, recipes. They all
 - **Safe failures:** if OCR finds no text, OCR fails, or Ollama is unavailable, the screenshot is still kept with its status (and its OCR text, if it was read). Use **Re-run analysis** in the detail view to try again.
 - **Delete** a screenshot, with a confirmation step. This removes its database record and its image file.
 - A "Check OCR and AI setup" button that tests Tesseract and Ollama.
+- **Search** page: keyword search over the saved text, with category and import-date filters, sorting, pages of results, thumbnails and highlighted match snippets.
+- **Ask ssorg** page: ask a question in plain language and get an answer written by the local `gemma3:4b` model from your saved screenshots, with the source screenshots and their extracted text shown next to it.
 
-**Not implemented yet:** keyword search, Ask ssorg, and similarity-based duplicate detection (for example the same picture saved in a different format).
+**Not implemented yet:** semantic ("meaning-based") search, similarity-based duplicate detection (for example the same picture saved in a different format), and bulk actions.
+
+## Search
+
+The **Search** page looks only at text that is already saved in your library, so it is instant and never runs OCR or the AI again. Every word you type must appear somewhere in a screenshot's:
+
+- original filename
+- extracted (OCR) text
+- AI summary
+- category
+- named entities
+- AI search terms
+- dates the AI found in the text
+
+Put words in quotes to match an exact phrase, for example `"order number"`. Matching is case-insensitive for ordinary English letters, and `%` and `_` are treated as normal characters. Results can be filtered by category and by the date you **imported** the screenshot (dates written inside screenshots are searchable as text but cannot be used as a date filter), and sorted by best match, newest, oldest or category. "Best match" ranks hits in the category, search terms, entities, summary and filename above hits in the long OCR text.
+
+This is plain keyword search, not meaning-based search. A search for "headphone" finds "headphones", but a search for "earbuds" will not find a screenshot that only says "headphones". OCR mistakes (for example "T0tal" for "Total") also hide matches.
+
+## Ask ssorg
+
+**Ask ssorg** answers questions from your saved screenshots in two steps:
+
+1. **Retrieval (no AI):** your question is reduced to its useful words (for example "assignment deadline"), and the best-matching screenshots are found in your SQLite library. At most 5 are used.
+2. **Answer:** only your question and a few short excerpts of text from those screenshots (about 4000 characters in total, plus filename, category, import date and summary) are sent to your local Ollama service and `gemma3:4b`. The model must answer only from that evidence and name the screenshots it used.
+
+If nothing matches, ssorg says so and **does not call the AI at all**. The model's answer is checked in Python: it may only cite screenshots that were actually retrieved, an answer without a valid citation is not shown, and numbers in the answer that are not in the cited text are flagged.
+
+**How to check an answer:** every answer shows its **Sources**, with the extracted text the answer was based on. Compare the answer with that text, and click **View details** to open the screenshot and compare it with the original image. The extracted text comes from OCR and can contain mistakes, and a small local model can still misread its evidence or miss an answer. Treat answers as a quick pointer to the right screenshot, not as a certain fact.
 
 ## Where your data is stored
 
@@ -118,7 +147,10 @@ Everything has a default and no `.env` file is required. See [.env.example](.env
 - The AI can be wrong. Dates and names are only kept if they appear in the OCR text, but categories and summaries are the model's best guess. Accuracy has not been formally measured yet (see [EVALUATION.md](EVALUATION.md)).
 - Analysis uses at most the first 6000 characters of a screenshot's text.
 - The first analysis after starting Ollama can take a while because the model has to load.
-- No keyword search or Ask ssorg yet, and no bulk delete or database reset buttons.
+- Search and Ask retrieval are keyword-based, not semantic. Synonyms, typos and OCR mistakes can hide a screenshot. Ask finds screenshots by the words in your question, so mention something that is likely to be written in the screenshot.
+- Ask ssorg uses a small local model. It can give wrong or incomplete answers, and it can ignore its instructions. The checks in the app (citations must be real, numbers are verified) reduce the risk but do not remove it.
+- Only the best few screenshots are given to the model, so questions that need the whole library ("how much did I spend in total?") cannot be answered.
+- No bulk delete or database reset buttons.
 - Use one running copy of the app at a time. Whether the whole app works fully offline has not been verified.
 
 ## Project documents

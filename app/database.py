@@ -11,6 +11,8 @@ How it stays safe and simple:
 - Problems are reported as DatabaseError with a plain message.
   Raw SQLite errors (and their stack traces) are not shown to users.
 
+Search (Stage 4) is also here, because it is SQL: search_screenshot_rows.
+
 Screenshot records are returned as plain dictionaries. The three list fields
 are stored as JSON text in the database and come back as real Python lists
 under the names important_dates, named_entities and useful_search_terms.
@@ -309,3 +311,103 @@ def delete_screenshot_record(screenshot_id: int, db_path: str | Path | None = No
     with _connect(db_path) as connection:
         cursor = connection.execute("DELETE FROM screenshots WHERE id = ?", (screenshot_id,))
         return cursor.rowcount > 0
+
+
+# ----- Search (Stage 4) -----
+# Which columns are searched, and how much a match in each one counts toward the
+# relevance score. These are fixed names written in this file. User text is
+# NEVER added to the SQL text; it only travels as "?" parameters.
+SEARCH_FIELD_WEIGHTS = (
+    ("category", 4),
+    ("useful_search_terms_json", 4),
+    ("named_entities_json", 4),
+    ("short_summary", 3),
+    ("original_filename", 3),
+    ("important_dates_json", 2),
+    ("ocr_text", 1),
+)
+
+# Only these sort orders exist; an unknown value falls back to relevance.
+SORT_ORDERS = {
+    "relevance": "relevance_score DESC, created_at DESC, id DESC",
+    "newest": "created_at DESC, id DESC",
+    "oldest": "created_at ASC, id ASC",
+    "category": "category IS NULL, category COLLATE NOCASE ASC, created_at DESC, id DESC",
+}
+
+
+def escape_like(text: str) -> str:
+    """Make text safe for a LIKE pattern, so % and _ are matched literally.
+
+    We use the backslash as the escape character (ESCAPE '\\' in the SQL below).
+    """
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def search_screenshot_rows(
+    terms: list[str] | tuple[str, ...] = (),
+    match_all: bool = True,
+    category: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    sort: str = "relevance",
+    limit: int = 20,
+    offset: int = 0,
+    db_path: str | Path | None = None,
+) -> tuple[list[dict], int]:
+    """Find screenshots whose text fields contain the given terms.
+
+    - Each term may appear in ANY searchable field (case-insensitive for ASCII).
+    - match_all=True: a screenshot must contain every term. False: any term is enough.
+    - category: exact category name. created_from / created_to: UTC ISO timestamps
+      (from is inclusive, to is exclusive).
+    - Returns (records for this page, total number of matches). Each record has a
+      "relevance_score". One screenshot is one row, so there are never duplicates.
+    """
+    terms = [term for term in (terms or []) if term]
+    patterns = [f"%{escape_like(term)}%" for term in terms]
+
+    # Score: add up the weight of every (term, field) pair that matches.
+    score_parts: list[str] = []
+    score_params: list[str] = []
+    for pattern in patterns:
+        for field, weight in SEARCH_FIELD_WEIGHTS:
+            score_parts.append(f"CASE WHEN {field} LIKE ? ESCAPE '\\' THEN {int(weight)} ELSE 0 END")
+            score_params.append(pattern)
+    score_sql = " + ".join(score_parts) if score_parts else "0"
+
+    # Filter: each term must be found in at least one field.
+    where_params: list = []
+    term_clauses = []
+    for pattern in patterns:
+        any_field = " OR ".join(f"{field} LIKE ? ESCAPE '\\'" for field, _ in SEARCH_FIELD_WEIGHTS)
+        term_clauses.append(f"({any_field})")
+        where_params.extend([pattern] * len(SEARCH_FIELD_WEIGHTS))
+    conditions = []
+    if term_clauses:
+        conditions.append("(" + (" AND " if match_all else " OR ").join(term_clauses) + ")")
+    if category:
+        conditions.append("category = ?")
+        where_params.append(category)
+    if created_from:
+        conditions.append("created_at >= ?")
+        where_params.append(created_from)
+    if created_to:
+        conditions.append("created_at < ?")
+        where_params.append(created_to)
+    where_sql = " AND ".join(conditions) if conditions else "1 = 1"
+
+    order_sql = SORT_ORDERS.get(sort, SORT_ORDERS["relevance"])
+    page_size = max(1, min(int(limit), config.SEARCH_MAX_LIMIT))
+    page_offset = max(0, int(offset))
+
+    with _connect(db_path) as connection:
+        total = connection.execute(
+            f"SELECT COUNT(*) FROM screenshots WHERE {where_sql}", where_params
+        ).fetchone()[0]
+        rows = connection.execute(
+            f"SELECT *, ({score_sql}) AS relevance_score FROM screenshots "
+            f"WHERE {where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            score_params + where_params + [page_size, page_offset],
+        ).fetchall()
+    return [_row_to_dict(row) for row in rows], int(total)

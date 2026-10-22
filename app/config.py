@@ -111,6 +111,19 @@ AI_CATEGORIES = (
 )
 AI_CONFIDENCE_LEVELS = ("low", "medium", "high")
 
+# ----- Search and Ask ssorg (Stage 4) -----
+SEARCH_PAGE_SIZE = 10        # results per page on the Search page
+SEARCH_MAX_TERMS = 8         # words/phrases used from one search query
+SEARCH_MAX_QUERY_CHARS = 200
+SEARCH_MAX_LIMIT = 100       # hard cap on rows returned by one search call
+
+ASK_MAX_QUESTION_CHARS = 500
+ASK_CANDIDATE_LIMIT = 25     # records fetched from SQLite before ranking
+ASK_MAX_EVIDENCE = 5         # at most this many screenshots are sent to the AI
+ASK_EXCERPT_CHARS = 600      # most OCR text sent per screenshot
+ASK_CONTEXT_CHARS = 4000     # most evidence text sent in total
+ASK_MAX_ANSWER_CHARS = 1200
+
 # ----- Colors (also mirrored in .streamlit/config.toml) -----
 COLOR_BACKGROUND = "#0D100F"
 COLOR_SURFACE = "#141A17"
