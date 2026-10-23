@@ -84,7 +84,13 @@ def validate_image_bytes(data: bytes) -> ImageInfo:
     try:
         with Image.open(io.BytesIO(data)) as image:
             image_format = image.format
+            if image.width * image.height > config.MAX_IMAGE_PIXELS:
+                raise InvalidImageError(
+                    f"This image has too many pixels. The limit is {config.MAX_IMAGE_PIXELS:,}."
+                )
             image.verify()  # catches corrupted or fake image files
+    except InvalidImageError:
+        raise
     except Exception as error:  # Pillow can raise several error types for broken files
         raise InvalidImageError("This file could not be read as an image. It may be corrupted.") from error
     if image_format not in _FORMATS:

@@ -1,46 +1,71 @@
 # Testing
 
-## Run the automated tests
+These steps are for Windows 11 using PowerShell in the VS Code terminal. Run commands from the project root, the folder containing `requirements.txt`.
 
-From the project root, with the virtual environment active:
+## Set up the Python environment
+
+Create a virtual environment and activate it:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation, use this for the current terminal only, then activate again:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.venv\Scripts\Activate.ps1
+```
+
+Install project and test dependencies:
+
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+The requirements file includes pytest. The app also needs Tesseract installed separately for live OCR and Ollama installed separately with the exact `gemma3:4b` model for live AI use. Neither is required for automated tests.
+
+## Run automated tests and syntax checks
 
 ```powershell
 python -m pytest
+python -m compileall app tests
 ```
 
-## What the tests cover
+`pytest` prints a failure location and assertion when a check fails. Fix the code or test setup responsible for that failure, then rerun the same command. `compileall` checks Python files for syntax errors; it does not prove that runtime behavior is correct.
 
-- `tests/test_database.py`: creating the database, adding and reading records, updating results, deleting, JSON list fields (including damaged JSON), the unique hash rule, SQL text stored literally, rollback, counts and ordering.
-- `tests/test_storage.py`: SHA-256 hashing, validating images by content, generated filenames, path-traversal protection (including symlinks where the computer allows them), no-overwrite saving, deleting only managed files.
-- `tests/test_import_workflow.py`: importing a new screenshot, exact duplicates, different images, cleanup when the database insert or the file save fails, keeping the screenshot when OCR or Gemma fails, batches where one file fails, re-running analysis, and deleting (including a missing image file and a tampered filename that points outside the folder).
-- `tests/test_search.py`: searching each field, case-insensitivity, several words and phrases, empty and no-match queries, special characters (`%`, `_`, quotes, backslashes and SQL-looking text), category and date filters, sorting and ranking, pagination and limits, no duplicate results, missing image files, snippets and highlighting, and that searching never calls OCR, the AI or the network.
-- `tests/test_ask.py`: keyword extraction, retrieving and ranking evidence, limits on the number and size of evidence, the answer checks (valid answer, malformed answer, missing fields, citing screenshots that were not retrieved, answers without citations, unverified numbers), Ollama unavailable or timing out, prompt-injection text inside a screenshot, and that no AI call is made when there is no evidence.
-- `tests/test_ocr.py`, `tests/test_gemma.py`, `tests/test_workflow.py`: the Stage 2 tests for OCR, Gemma and the analysis step.
+Tests use pytest's `tmp_path` and an autouse fixture in `tests/conftest.py` that redirects the configured database and screenshot folder to temporary locations. Tests mock Tesseract and Ollama calls. They do not open or delete `data/ssorg.db` or files in `data/screenshots/`, and they do not call a cloud AI service.
 
-## Safety for your real data
+## What the automated tests cover
 
-`tests/conftest.py` redirects the data folder, screenshot folder and database to a temporary folder for **every** test. Tests never read or write your real `data/ssorg.db` or `data/screenshots/`. OCR and Ollama are mocked, so no Tesseract, Ollama or model is needed.
+- `tests/test_ocr.py`, `tests/test_workflow.py`: OCR success, empty text, bad images, unavailable Tesseract, mocked errors, and one failed image not stopping a batch.
+- `tests/test_config.py`: fixed model, Ollama URL/timeout parsing, optional Tesseract configuration, and ignored private runtime files.
+- `tests/test_gemma.py`: the fixed `gemma3:4b` model, local Ollama request, metadata validation, malformed responses, untrusted OCR text, timeouts, missing model and no cloud fallback.
+- `tests/test_storage.py`, `tests/test_database.py`, `tests/test_import_workflow.py`: image validation, SHA-256 duplicates, temporary file storage, SQLite schema and transactions, cleanup on failed inserts, safe deletion and partial failures.
+- `tests/test_search.py`: matching across fields, filters, sort order, limits, special characters, missing image files, and read-only search behavior.
+- `tests/test_ask.py`: evidence retrieval and limits, no-evidence behavior, prompt-injection text, citations, ungrounded/malformed answers and Ollama errors.
 
-## What the automated tests do not cover
+The Streamlit UI and real OCR/model accuracy are not covered by automated tests.
 
-- Real Tesseract accuracy and real Gemma answers.
-- The Streamlit interface itself.
+## Optional manual checks
 
-## Manual test: Search and Ask ssorg
+Use only a few non-sensitive or synthetic screenshots. These checks use your configured local Tesseract and/or local Ollama.
 
-You need a few imported screenshots that contain text (a receipt, a notice, a chat).
+1. Start the app with `python -m streamlit run app/main.py`.
+2. Upload a screenshot, inspect the preview, process it, and confirm that OCR text and metadata appear in **All Screenshots**.
+3. Upload identical bytes with a different filename. The app should report a duplicate; a visually similar image with different bytes is not guaranteed to match.
+4. Search for a word visible in the screenshot and confirm the result and highlighted snippet. Try a missing word and a category filter.
+5. Ask a question whose answer is visible in the source text. Compare the answer and citation with the screenshot and extracted text. Ask about a detail absent from the library and confirm that the app reports no matching evidence.
+6. To check local error handling, stop Ollama and try Ask or import a separate synthetic screenshot. The app should show a helpful message and preserve the saved image and any OCR text it already extracted.
 
-1. **Search:** open **Search**, type a word you can see in one screenshot, and check that it appears with the word highlighted. Try a word that is in none of them (you should see "No screenshots match"), then use the category filter, the sort menu and **Clear**.
-2. **Search needs no AI:** quit Ollama from the system tray and search again. Search still works.
-3. **Ask:** start Ollama, open **Ask ssorg**, and ask about something in one screenshot, for example "Which screenshot mentions the deadline?" using a word from the text. Check that the answer matches the **Sources** text shown below it, then click **View details** and compare with the original image.
-4. **No evidence:** ask about something that is in none of your screenshots. You should see "No matching evidence was found" and no answer.
-5. **Ollama down:** quit Ollama and ask again. You should see a message that the local AI could not answer, plus the matching screenshots.
+## Safe manual deletion check
 
-## Manual test: import, restart, duplicate, delete
+Use a disposable screenshot you are comfortable deleting. Open it in **All Screenshots**, select **Delete screenshot**, review the confirmation, and confirm. Verify only that record and its managed image were removed. Do not test deletion by editing the database or inserting crafted file paths by hand.
 
-1. Start Ollama and the app: `python -m streamlit run app/main.py`.
-2. **Import:** upload one screenshot that contains text and click **Process screenshots**. Open its result under "Import results".
-3. **Restart:** stop the app with `Ctrl+C`, start it again, and open **All Screenshots**. The screenshot should still be there with its text and analysis.
-4. **Duplicate:** upload the same file again, or a copy renamed in File Explorer, and click Process. You should see "This screenshot is already in your library." and the total should not change.
-5. **Failure handling:** stop Ollama (quit it from the system tray), import a different screenshot, and check that it is saved with "AI analysis failed" and its OCR text. Start Ollama again and click **Re-run analysis** in its detail view.
-6. **Delete:** open a screenshot, click **Delete screenshot**, then confirm. It should disappear from the library and its file should disappear from `data/screenshots/`.
+## Optional live setup checks
+
+- OCR availability: run `tesseract --version` in PowerShell. The app also offers **Check OCR and AI setup**. If Tesseract is installed outside PATH, set `TESSERACT_CMD` in your ignored `.env` file.
+- Ollama availability: run `ollama list` and confirm `gemma3:4b` is installed, then use the app's setup check. This is optional; automated tests mock Ollama.
+- Keep `OLLAMA_HOST` on `http://localhost:11434` for the default same-computer setup. Configuring another host sends OCR text and Ask evidence to that host.

@@ -11,8 +11,8 @@ from pathlib import Path
 # ----- Brand -----
 APP_NAME = "ssorg.dev"
 TAGLINE = "Your screenshots, finally searchable."
-ASK_FEATURE_NAME = "Ask ssorg"  # reserved for a later stage
-CURRENT_STAGE = "Stage 3: local storage, library and duplicate detection"
+ASK_FEATURE_NAME = "Ask ssorg"
+CURRENT_STAGE = "Stage 5: testing, privacy and evaluation"
 
 # ----- Uploads -----
 # Extensions are lowercase and include the dot, e.g. ".png".
@@ -20,6 +20,7 @@ SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 # Pillow reports these format names after it opens a valid image.
 SUPPORTED_IMAGE_FORMATS = ("PNG", "JPEG", "WEBP")
 MAX_FILE_SIZE_MB = 20
+MAX_IMAGE_PIXELS = 40_000_000  # reject oversized decoded images before preview or OCR
 PREVIEW_MAX_PIXELS = 600  # previews are shrunk to this size before display
 PREVIEW_COLUMNS = 3
 LIBRARY_PAGE_SIZE = 12  # screenshots shown per page in the library
@@ -90,7 +91,8 @@ MIN_MEANINGFUL_CHARACTERS = 3
 # ----- Local AI (Ollama + Gemma) -----
 DEFAULT_OLLAMA_MODEL = "gemma3:4b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
-OLLAMA_MODEL = _env("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+# The model is intentionally fixed; do not allow local configuration to switch models.
+OLLAMA_MODEL = DEFAULT_OLLAMA_MODEL
 
 
 def _normalize_url(value: str) -> str:

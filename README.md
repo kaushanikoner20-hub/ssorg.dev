@@ -8,7 +8,7 @@ ssorg.dev is a local-first AI screenshot organizer. It reads the text in your sc
 
 Screenshots pile up: receipts, error messages, chats, tickets, recipes. They all have filenames like `Screenshot 2026-10-20 143012.png`, so finding one later means scrolling through hundreds of thumbnails.
 
-## Current status: Stage 4 (search and Ask ssorg)
+## Current status: Stage 5 (testing, privacy and evaluation)
 
 **Works now:**
 - Upload multiple PNG, JPG, JPEG and WEBP screenshots, with previews, validation and removal from the selection.
@@ -21,6 +21,7 @@ Screenshots pile up: receipts, error messages, chats, tickets, recipes. They all
 - A "Check OCR and AI setup" button that tests Tesseract and Ollama.
 - **Search** page: keyword search over the saved text, with category and import-date filters, sorting, pages of results, thumbnails and highlighted match snippets.
 - **Ask ssorg** page: ask a question in plain language and get an answer written by the local `gemma3:4b` model from your saved screenshots, with the source screenshots and their extracted text shown next to it.
+- Uploads are checked by file size, decoded image format and dimensions before preview and processing. The current maximum is 20 MB and 40 million pixels per image.
 
 **Not implemented yet:** semantic ("meaning-based") search, similarity-based duplicate detection (for example the same picture saved in a different format), and bulk actions.
 
@@ -128,17 +129,18 @@ python -m streamlit run app/main.py
 
 Your browser opens at http://localhost:8501. Make sure Ollama is running (its icon is in the system tray).
 
-### 5. Run the tests
+### 5. Run tests and syntax checks
 
 ```powershell
 python -m pytest
+python -m compileall app tests
 ```
 
 The tests use fake OCR and fake Ollama responses. They do not need Tesseract or Ollama.
 
 ## Settings
 
-Everything has a default and no `.env` file is required. See [.env.example](.env.example) for the supported variables: `TESSERACT_CMD`, `TESSERACT_LANG`, `OLLAMA_HOST`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT`, `OCR_TIMEOUT_SECONDS`, `SSORG_DATA_DIR`, `SSORG_SCREENSHOT_DIR`, `SSORG_DATABASE_PATH`.
+Everything has a default and no `.env` file is required. The model is fixed to `gemma3:4b`; it cannot be changed through configuration. See [.env.example](.env.example) for supported variables: `TESSERACT_CMD`, `TESSERACT_LANG`, `OLLAMA_HOST`, `OLLAMA_TIMEOUT`, `OCR_TIMEOUT_SECONDS`, `SSORG_DATA_DIR`, `SSORG_SCREENSHOT_DIR`, `SSORG_DATABASE_PATH`.
 
 ## Current limitations
 

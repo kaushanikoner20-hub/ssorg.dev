@@ -66,7 +66,13 @@ def test_tesseract_not_installed_gives_clear_message():
         result = ocr.extract_text(make_png_bytes())
     assert result.status == ocr.STATUS_ERROR
     assert "Tesseract" in result.message
-    assert "TESSERACT_CMD" in result.message
+
+
+def test_missing_pytesseract_package_does_not_crash_ocr_call(monkeypatch):
+    monkeypatch.setattr(ocr, "pytesseract", None)
+    result = ocr.extract_text(b"not decoded")
+    assert result.status == ocr.STATUS_ERROR
+    assert "pytesseract" in result.message
 
 
 def test_tesseract_failure_is_error():
@@ -138,10 +144,12 @@ def test_configured_tesseract_path_is_used():
 
 
 def test_configured_path_that_does_not_exist_is_a_clear_error():
-    with patch.object(config, "TESSERACT_CMD", "Z:/definitely/missing/tesseract.exe"), fake_engine("x") as engine:
+    missing_path = "Z:/definitely/missing/tesseract.exe"
+    with patch.object(config, "TESSERACT_CMD", missing_path), fake_engine("x") as engine:
         result = ocr.extract_text(make_png_bytes())
     assert result.status == ocr.STATUS_ERROR
     assert "TESSERACT_CMD" in result.message
+    assert missing_path not in result.message
     engine.assert_not_called()
 
 

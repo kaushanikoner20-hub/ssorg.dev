@@ -1,4 +1,4 @@
-"""ssorg.dev - Stage 4: dashboard, OCR, local Gemma analysis, a saved library, keyword search and Ask ssorg.
+"""ssorg.dev: dashboard, OCR, local Gemma analysis, a saved library, keyword search and Ask ssorg.
 
 Run from the project root with:
     streamlit run app/main.py
@@ -193,6 +193,11 @@ def check_uploaded_image(uploaded_file):
 
     try:
         with Image.open(io.BytesIO(uploaded_file.getvalue())) as image:
+            if image.width * image.height > config.MAX_IMAGE_PIXELS:
+                return False, (
+                    "This image has too many pixels. "
+                    f"The limit is {config.MAX_IMAGE_PIXELS:,}."
+                )
             image.verify()  # catches corrupted or fake image files
             image_format = image.format
     except Exception:  # Pillow can raise several error types for broken files

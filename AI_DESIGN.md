@@ -1,11 +1,11 @@
 # AI Design
 
-How ssorg.dev analyzes screenshots in Stage 2. Everything here describes what the code in `app/ocr.py`, `app/gemma.py` and `app/processor.py` actually does.
+How ssorg.dev analyzes screenshots today. The flow is implemented in `app/ocr.py`, `app/gemma.py`, `app/search.py` and `app/processor.py`.
 
 ## Pipeline
 
 1. **OCR** (`app/ocr.py`): Pillow loads the image and makes a copy in RGB (transparent images get a white background). Tesseract, through `pytesseract`, extracts the text. Fewer than 3 letters or digits counts as "no readable text".
-2. **AI analysis** (`app/gemma.py`): if meaningful text was found, the text is sent to Ollama's local chat API (`/api/chat`, default `http://localhost:11434`) using the model `gemma3:4b`.
+2. **AI analysis** (`app/gemma.py`): if meaningful text was found, the text is sent to Ollama's chat API (`/api/chat`, default `http://localhost:11434`) using the fixed model `gemma3:4b`.
 3. **Validation**: the answer is parsed as JSON (never with `eval`) and checked before it is shown.
 
 Each screenshot goes through these steps on its own. A failure in one does not stop the others. Since Stage 3 the results are saved in SQLite, and a screenshot whose AI step failed keeps its OCR text and can be analyzed again with **Re-run analysis**.
@@ -29,11 +29,7 @@ The request asks Ollama for structured JSON output with this shape, uses tempera
 
 Ollama not running, connection or read timeout, model not found (HTTP 404), other HTTP errors, replies that are not JSON, JSON in the wrong shape, missing fields, wrong types, and invalid categories. Users see short messages, never stack traces.
 
-## Not done yet
-
-No accuracy measurements exist. Later stages will add storage of results, search and Ask ssorg.
-
-## Ask ssorg (Stage 4)
+## Ask ssorg
 
 Ask ssorg uses the same local model (`gemma3:4b`) and the same local Ollama connection as the analysis step, through a shared helper in `app/gemma.py`. It uses **retrieval first**: the model never sees the whole library.
 
@@ -50,3 +46,7 @@ Ask ssorg uses the same local model (`gemma3:4b`) and the same local Ollama conn
 - A malformed reply, an unavailable Ollama, a timeout or a missing model produce a plain message, and the matching screenshots are still listed.
 
 **What this does not guarantee:** a small model can still misread its evidence, merge details of two screenshots, miss an answer that is there, or follow injected instructions in a way these checks cannot see. OCR errors flow straight into answers. The checks reduce these risks but have not been measured, and the answers have not been evaluated for accuracy.
+
+## Evaluation status
+
+There are no measured OCR, classification, summary, search, or answer-accuracy results. `EVALUATION.md` provides a synthetic manual checklist. Automated tests validate the application logic with mocked OCR and Ollama responses; they do not measure real model performance.

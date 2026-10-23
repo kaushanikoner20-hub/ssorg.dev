@@ -91,7 +91,7 @@ def check_tesseract() -> tuple[bool, str]:
     if pytesseract is None:
         return False, MESSAGE_PYTESSERACT_MISSING
     if config.TESSERACT_CMD and not Path(config.TESSERACT_CMD).is_file():
-        return False, f"TESSERACT_CMD points to a file that does not exist: {config.TESSERACT_CMD}"
+        return False, "TESSERACT_CMD points to a file that does not exist. Check the path in your .env file."
     _configure_tesseract()
     try:
         version = pytesseract.get_tesseract_version()
@@ -173,7 +173,7 @@ def extract_text(source: Any) -> OcrResult:
     if config.TESSERACT_CMD and not Path(config.TESSERACT_CMD).is_file():
         return OcrResult(
             STATUS_ERROR,
-            message=f"TESSERACT_CMD points to a file that does not exist: {config.TESSERACT_CMD}",
+            message="TESSERACT_CMD points to a file that does not exist. Check the path in your .env file.",
         )
     _configure_tesseract()
 

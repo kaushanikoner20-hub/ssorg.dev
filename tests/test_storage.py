@@ -5,7 +5,7 @@ import os
 
 from PIL import Image
 
-from app import config, storage
+from app import config, main, storage
 
 
 def make_image_bytes(image_format="PNG", color="white", size=(60, 30)):
@@ -52,6 +52,30 @@ def test_invalid_uploads_are_rejected_with_friendly_messages():
 def test_oversized_upload_is_rejected():
     too_big = b"x" * (config.MAX_FILE_SIZE_MB * 1024 * 1024 + 1)
     assert "limit" in expect_invalid(too_big)
+
+
+def test_image_with_too_many_pixels_is_rejected_before_decoding(monkeypatch):
+    monkeypatch.setattr(config, "MAX_IMAGE_PIXELS", 100)
+    oversized_dimensions = make_image_bytes(size=(11, 10))
+    message = expect_invalid(oversized_dimensions)
+    assert message is not None and "too many pixels" in message
+
+
+def test_upload_preview_validation_rejects_too_many_pixels(monkeypatch):
+    monkeypatch.setattr(config, "MAX_IMAGE_PIXELS", 100)
+
+    class FakeUpload:
+        name = "large.png"
+
+        def __init__(self):
+            self.data = make_image_bytes(size=(11, 10))
+            self.size = len(self.data)
+
+        def getvalue(self):
+            return self.data
+
+    valid, message = main.check_uploaded_image(FakeUpload())
+    assert valid is False and "too many pixels" in message
 
 
 # ----- generated filenames -----

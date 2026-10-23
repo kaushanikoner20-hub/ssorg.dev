@@ -20,6 +20,12 @@ data/ssorg.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Private or test images (docs/screenshots is for README images and is tracked)
 test_images/
